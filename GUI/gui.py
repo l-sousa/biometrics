@@ -6,6 +6,14 @@ from tkinter import *
 import cv2
 from pprint import pprint
 import PyKCS11
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.backends.interfaces import DHBackend
+from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography import x509
 
 class GUI:
 
@@ -19,7 +27,7 @@ class GUI:
 
         # This is the section of code which creates a button
         self.btn_cc = Button(self.root, text='Read CC Card', bg='#838B8B', font=(
-            'arial', 12, 'normal'), command=self.read_cc_card).place(x=122, y=300)
+            'arial', 12, 'normal'), command=self.read_cc).place(x=122, y=300)
 
         # This is the section of code which creates a button
         self.btn_fgp = Button(self.root, text='Read Fingerprint', bg='#838B8B', font=(
@@ -51,7 +59,7 @@ class GUI:
         self.lbl_card_rest = Label(self.root, text='(...)', bg='#838B8B', font=(
             'arial', 12, 'normal')).place(x=52, y=197)
 
-    def verifyCC(self):
+    def verify_cc(self):
         '''
         The existence of a CC is verified by the PKCS11 driver.
         '''
@@ -63,18 +71,20 @@ class GUI:
             if slots:
                 print("CC verified..")
                 return pkcs11
+            else:
+                print("No CC inserted.")
+                exit(0)
         except:
             print("CC verification failed.")
             exit(0)
 
-
-    def read_cc_card(self):
+    def read_cc(self):
         '''
         Needed info is retrieved from the Citizen Card:
         Name, serial number (Civil ID), Auth PrivKey and Citizen Authentication Cerificate.
         '''
         print("Reading Citizen card...")
-        pkcs11 = self.verifyCC()
+        pkcs11 = self.verify_cc()
         print("Retrieving data from CC...")
         slot = pkcs11.getSlotList(tokenPresent=True)[0]
         all_attr = list(PyKCS11.CKA.keys())
@@ -82,26 +92,31 @@ class GUI:
         session = pkcs11.openSession(slot)
         userInfo = dict()
         for obj in session.findObjects():
-            # Get object attributes
+        # Get object attributes
             attr = session.getAttributeValue(obj, all_attr)
             # Create dictionary with attributes
             attr = dict(zip(map(PyKCS11.CKA.get, all_attr), attr))
+            if attr['CKA_LABEL'] == 'CITIZEN AUTHENTICATION CERTIFICATE':
+                if attr['CKA_CERTIFICATE_TYPE'] != None:
+                    cert_bytes = bytes(attr['CKA_VALUE'])
+                    cert = x509.load_der_x509_certificate(cert_bytes, backend=default_backend())
+                    userInfo['GIVEN_NAME'] = cert.subject.get_attributes_for_oid(x509.NameOID.GIVEN_NAME)[0].value
+                    userInfo['SURNAME'] = cert.subject.get_attributes_for_oid(x509.NameOID.SURNAME)[0].value
+                    userInfo['SERIAL_NUMBER'] = cert.subject.get_attributes_for_oid(x509.NameOID.SERIAL_NUMBER)[0].value
+            
+        private_key = session.findObjects([
+            (PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY),
+            (PyKCS11.CKA_LABEL, 'CITIZEN AUTHENTICATION KEY')
+            ])[0]
 
-            pprint(attr)
-
-            # if attr['CKA_LABEL'] == 'CITIZEN AUTHENTICATION CERTIFICATE':
-            #     if attr['CKA_CERTIFICATE_TYPE'] != None:
-            #         cert_bytes = bytes(attr['CKA_VALUE'])
-            #         cert = x509.load_der_x509_certificate(
-            #             cert_bytes, backend=default_backend())
-            #         userInfo['GIVEN_NAME'] = cert.subject.get_attributes_for_oid(
-            #             x509.NameOID.GIVEN_NAME)[0].value
-            #         userInfo['SURNAME'] = cert.subject.get_attributes_for_oid(x509.NameOID.SURNAME)[
-            #             0].value
-            #         userInfo['SERIAL_NUMBER'] = cert.subject.get_attributes_for_oid(
-            #             x509.NameOID.SERIAL_NUMBER)[0].value
-
+        print("USER INFO:")
+        pprint(userInfo)
+        self.lbl_card_name = Label(self.root, text= userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER'], bg='#838B8B',
+                                   font=('arial', 12, 'normal')).place(x=52, y=107)
         
+        return cert_bytes, userInfo, private_key, session
+
+     
 
     # this is the function called when the button is clicked
     def read_fingerprint(self):
