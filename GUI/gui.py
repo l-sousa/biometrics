@@ -14,11 +14,30 @@ from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography import x509
+import mysql.connector
+from mysql.connector import Error
 
 class GUI:
 
     def __init__(self) -> None:
         self.root = Tk()
+
+        # DB connection
+        try:
+            self.connection = mysql.connector.connect(host='localhost',
+                                                database='users',
+                                                user='user',
+                                                password='pwd')
+            if self.connection.is_connected():
+                db_Info = self.connection.get_server_info()
+                print("Connected to MySQL Server version ", db_Info)
+                self.cursor = self.connection.cursor()
+                self.cursor.execute("select database();")
+                record = self.cursor.fetchone()
+                print("You're connected to database: ", record)
+
+        except Error as e:
+            print("Error while connecting to MySQL", e)
 
         # This is the section of code which creates the main window
         self.root.geometry('850x570')
@@ -111,8 +130,30 @@ class GUI:
 
         print("USER INFO:")
         pprint(userInfo)
+
+        # # Insert new user
+        # sql_insert_query = """ INSERT INTO users
+        #                (cc_number, given_name, surname, bio_data_location) VALUES (%s,%s,%s,%s)"""
+        # # tuple to insert at placeholder
+        # user = (userInfo['GIVEN_NAME'], userInfo['SURNAME'], userInfo['SERIAL_NUMBER'], "bio_data/" + userInfo['SERIAL_NUMBER'])
+
+        # Check if user exists
+        user_select_query = f"SELECT * FROM users WHERE cc_number = '{userInfo['SERIAL_NUMBER']}'"
+        user_id = (userInfo['SERIAL_NUMBER'])
+
+        self.cursor.execute(user_select_query)
+        records = self.cursor.fetchall()
+        print("Users match: ", self.cursor.rowcount)
+
         self.lbl_card_name = Label(self.root, text= userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER'], bg='#838B8B',
                                    font=('arial', 12, 'normal')).place(x=52, y=107)
+
+        if self.cursor.rowcount >= 1:
+            self.lbl_card_rest = Label(self.root, text='User exists, proceed to biometric auth...', bg='#00FF00', font=(
+            'arial', 12, 'normal')).place(x=52, y=197)
+        else:
+            self.lbl_card_rest = Label(self.root, text="User doesn't exist. Access denied.", bg='#FF0000', font=(
+            'arial', 12, 'normal')).place(x=52, y=197)
         
         return cert_bytes, userInfo, private_key, session
 
