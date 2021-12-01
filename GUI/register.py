@@ -49,8 +49,6 @@ class RegisterGUI:
 
         # This is the section of code which creates the main window
         
-
-
         self.frame_width = 1600
         self.frame_height = 900
 
@@ -230,5 +228,5 @@ class RegisterGUI:
 
 
 if __name__ == "__main__":
-    gui = GUI()
+    gui = RegisterGUI()
     gui.root.mainloop()
