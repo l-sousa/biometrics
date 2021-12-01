@@ -20,38 +20,39 @@ import PIL.Image
 
 from PIL import ImageTk
 
-from register import RegisterGUI
 
 
-class GUI:
+# self.my_w_child = tk.Toplevel(root)
+# self.my_w_child.geometry("500x500")
+# self.my_w_child.title('Register')
+# my_str1 = tk.StringVar()
+# l1 = tk.Label(self.my_w_child, textvariable=my_str1)
+# l1.grid(row=1, column=2)
+# my_str1.set('Hi I am child window')
+# b2 = tk.Button(self.my_w_child, text='Close child',
+#                 command=self.my_w_child.destroy)
+# b2.grid(row=2, column=2)
 
-    def __init__(self) -> None:
-        self.root = Tk()
 
-        # DB connection
-        try:
-            self.connection = mysql.connector.connect(host='localhost',
-                                                      database='users',
-                                                      user='user',
-                                                      password='pwd')
-            if self.connection.is_connected():
-                db_Info = self.connection.get_server_info()
-                print("Connected to MySQL Server version ", db_Info)
-                self.cursor = self.connection.cursor()
-                self.cursor.execute("select database();")
-                record = self.cursor.fetchone()
-                print("You're connected to database: ", record)
+class RegisterGUI:
 
-        except Error as e:
-            print("Error while connecting to MySQL", e)
+    def __init__(self, main_gui_root) -> None:
+
+        self.my_w_child = tk.Toplevel(main_gui_root)
+
+        self.my_w_child.geometry("1600x900")
+        self.my_w_child.title('Register')
+        my_str1 = tk.StringVar()
+        b2 = tk.Button(self.my_w_child, text='Quit',
+                       command=self.my_w_child.destroy)
+        b2.grid(row=2, column=2)
 
         # This is the section of code which creates the main window
+        
+
 
         self.frame_width = 1600
         self.frame_height = 900
-        self.root.geometry('1600x900')
-        self.root.configure()
-        self.root.title('Biometric System')
 
         self.framerow1height = self.frame_height/10
         self.framerow2height = self.frame_height/1.5
@@ -64,49 +65,39 @@ class GUI:
         ##################################################### CC #####################################################
         w = self.framerow_center / 5
 
-        self.lbl_card_info = Label(self.root, text='Card Info', font=(
+        self.lbl_card_info = Label(self.my_w_child, text='Card Info', font=(
             'arial', 20, 'normal')).place(x=w, y=self.framerow1height)
 
-        self.lbl_card_name = Label(self.root, text='',
+        self.lbl_card_name = Label(self.my_w_child, text='',
                                    font=('arial', 12, 'normal')).place(x=w, y=self.framerow1height + 50)
 
-        self.lbl_card_nif = Label(self.root, text='',
+        self.lbl_card_nif = Label(self.my_w_child, text='',
                                   font=('arial', 12, 'normal')).place(x=w, y=self.framerow1height + 100)
 
-        self.lbl_card_gender = Label(self.root, text='', font=(
+        self.lbl_card_gender = Label(self.my_w_child, text='', font=(
             'arial', 12, 'normal')).place(x=w, y=self.framerow1height + 150)
 
-        self.btn_cc = Button(self.root, text='Read CC Card', font=(
+        self.btn_cc = Button(self.my_w_child, text='Read CC Card', font=(
             'arial', 12, 'normal'), command=self.read_cc).place(x=w, y=self.framerow1height + 150)
 
         ##################################################### FACIAL #####################################################
         self.create_image()
         w = self.framerow_center
 
-        self.lbl_card_info = Label(self.root, text='Facial Recognition', font=(
+        self.lbl_card_info = Label(self.my_w_child, text='Facial Recognition', font=(
             'arial', 20, 'normal')).place(x=w, y=self.framerow1height)
 
-        self.btn_frcg = Button(self.root, text='Facial Recognition', font=(
+        self.btn_frcg = Button(self.my_w_child, text='Facial Recognition', font=(
             'arial', 12, 'normal'), command=self.read_facial).place(x=w, y=self.framerow1height + self.videocanvasheight + 60)
 
         ##################################################### FINGERPRINT #####################################################
 
         w = self.framerow_center + self.videocanvaswidth + 100
-        self.lbl_card_info = Label(self.root, text='Facial Recognition', font=(
+        self.lbl_card_info = Label(self.my_w_child, text='Facial Recognition', font=(
             'arial', 20, 'normal')).place(x=w, y=self.framerow1height)
 
-        self.btn_fgp = Button(self.root, text='Read Fingerprint', font=(
+        self.btn_fgp = Button(self.my_w_child, text='Read Fingerprint', font=(
             'arial', 12, 'normal'), command=self.read_fingerprint).place(x=w, y=self.framerow1height + 50)
-
-        ##################################################### ENROLL #####################################################
-
-        w = self.framerow_center
-
-        self.btn_register = Button(self.root, text='Register', font=(
-            'arial', 12, 'normal'), command=self.register).place(x=w, y=self.framerow2height)
-
-    def register(self):
-        RegisterGUI(self.root)
 
     def verify_cc(self):
         '''
@@ -179,14 +170,14 @@ class GUI:
         records = self.cursor.fetchall()
         print("Users match: ", self.cursor.rowcount)
 
-        self.lbl_card_name = Label(self.root, text=userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER'],
+        self.lbl_card_name = Label(self.my_w_child, text=userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER'],
                                    font=('arial', 12, 'normal')).place(x=52, y=107)
 
         if self.cursor.rowcount >= 1:
-            self.lbl_card_rest = Label(self.root, text='User exists, proceed to biometric auth...', bg='#00FF00', font=(
+            self.lbl_card_rest = Label(self.my_w_child, text='User exists, proceed to biometric auth...', bg='#00FF00', font=(
                 'arial', 12, 'normal')).place(x=52, y=197)
         else:
-            self.lbl_card_rest = Label(self.root, text="User doesn't exist. Access denied.", bg='#FF0000', font=(
+            self.lbl_card_rest = Label(self.my_w_child, text="User doesn't exist. Access denied.", bg='#FF0000', font=(
                 'arial', 12, 'normal')).place(x=52, y=197)
 
         return cert_bytes, userInfo, private_key, session
@@ -199,7 +190,7 @@ class GUI:
     def create_image(self, file=""):
         # First, we create a canvas to put the picture on
         Video_Feed = Canvas(
-            self.root, height=self.videocanvasheight, width=self.videocanvaswidth, bg="white")
+            self.my_w_child, height=self.videocanvasheight, width=self.videocanvaswidth, bg="white")
         # Then, we actually create the image file to use (it has to be a *.gif)
         # <-- you will have to copy-paste the filepath here, for example 'C:\Desktop\pic.gif'
         self.picture_file = PhotoImage(file=file)
