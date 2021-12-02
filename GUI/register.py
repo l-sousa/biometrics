@@ -95,7 +95,9 @@ class RegisterGUI:
             'arial', 20, 'normal')).place(x=w, y=self.framerow1height)
 
         self.lbl_card_name = Label(self.my_w_child, text='',
-                                   font=('arial', 12, 'normal')).place(x=w, y=self.framerow1height + 50)
+                                   font=('arial', 12, 'normal'))
+                                   
+        self.lbl_card_name.place(x=w, y=self.framerow1height + 50)
 
         self.lbl_card_nif = Label(self.my_w_child, text='',
                                   font=('arial', 12, 'normal')).place(x=w, y=self.framerow1height + 100)
@@ -226,17 +228,19 @@ class RegisterGUI:
         records = self.cursor.fetchall()
         print("Users match: ", self.cursor.rowcount)
 
-        self.lbl_card_name = Label(self.my_w_child, text=userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER'],
-                                   font=('arial', 12, 'normal')).place(x=52, y=107)
+        # self.lbl_card_name = Label(self.my_w_child, text=userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER'],
+        #                            font=('arial', 12, 'normal')).place(x=52, y=107)
+
+        self.lbl_card_name['text'] = userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER']
         
         
         if self.cursor.rowcount > 0:
             self.lbl_card_rest = Label(self.my_w_child, text='User already exists.', bg='#FF0000', font=(
-                'arial', 12, 'normal')).place(x=52, y=197)
+                'arial', 12, 'normal')).place(x=self.framerow_center / 5, y=self.framerow1height + 100)
 
         else:
             self.lbl_card_rest = Label(self.my_w_child, text="Card read. Proceed...", bg='#00FF00', font=(
-                'arial', 12, 'normal')).place(x=52, y=197)
+                'arial', 12, 'normal')).place(x=self.framerow_center / 5, y=self.framerow1height + 100)
             self.user_id = userInfo['SERIAL_NUMBER']
             self.user['SERIAL_NUMBER'] = userInfo['SERIAL_NUMBER']
             self.user['GIVEN_NAME'] = userInfo['GIVEN_NAME']
