@@ -3,3 +3,4 @@ PyKCS11==1.5.7
 cryptography
 tk
 mysql-connector-python
+Pillow

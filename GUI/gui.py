@@ -17,6 +17,7 @@ from cryptography import x509
 import mysql.connector
 from mysql.connector import Error
 import PIL.Image
+import time
 
 from PIL import ImageTk
 
@@ -208,19 +209,19 @@ class GUI:
         Video_Feed.place(x=self.framerow_center, y=self.framerow1height + 50)
 
     # this is the function called when the button is clicked
-    def read_facial(self):
-        camera = cv2.VideoCapture(0)
-
+    def read_facial(self, user_id=5):
+        camera = cv2.VideoCapture('http://192.168.1.215:8080/video')
+        counter = 0
         while True:
             return_value, image = camera.read()
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            cv2.imshow('image')
+            cv2.imshow('image',image)
             if cv2.waitKey(1) & 0xFF == ord('s'):
                 image = cv2.resize(image, (0, 0), fx=0.6, fy=0.6)
                 image = cv2.resize(image, (400, 400))
 
-                cv2.imwrite('img/selfie.png', image)
-                img = cv2.imread('img/selfie.png', cv2.IMREAD_UNCHANGED)
+                cv2.imwrite(f'img/{user_id}_{counter}.png', image)
+                img = cv2.imread(f'img/{user_id}_{counter}.png', cv2.IMREAD_UNCHANGED)
                 scale_percent = 80
                 width = int(img.shape[1] * scale_percent / 100)
                 height = int(img.shape[0] * scale_percent / 100)
@@ -228,11 +229,15 @@ class GUI:
 
                 cv2.resize(img, dsize)
 
-                cv2.imwrite('img/selfie.png', img)
+                cv2.imwrite(f'img/{user_id}_{counter}.png', img)
 
-                self.create_image('img/selfie.png')
+                self.create_image(f'img/{user_id}_{counter}.png')
 
+                counter+=1
+            
+            if counter >= 5:
                 break
+
 
         camera.release()
         cv2.destroyAllWindows()

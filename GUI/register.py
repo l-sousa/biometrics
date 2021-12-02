@@ -1,4 +1,5 @@
 from abc import abstractmethod
+import os
 from os import name
 import tkinter as tk
 from tkinter import ttk
@@ -38,6 +39,16 @@ class RegisterGUI:
 
     def __init__(self, main_gui_root) -> None:
 
+
+        self.user_id = None
+        self.user = {
+            'SERIAL_NUMBER' : None,
+            'GIVEN_NAME' : None,
+            'SURNAME' : None
+        }
+
+        self.state = {'card_read' : 0, 'facial_recognition' : 0, 'fingerprint_recognition' : 0}
+
         self.my_w_child = tk.Toplevel(main_gui_root)
 
         self.my_w_child.geometry("1600x900")
@@ -46,6 +57,23 @@ class RegisterGUI:
         b2 = tk.Button(self.my_w_child, text='Quit',
                        command=self.my_w_child.destroy)
         b2.grid(row=2, column=2)
+
+        # DB connection
+        try:
+            self.connection = mysql.connector.connect(host='localhost',
+                                                      database='users',
+                                                      user='user',
+                                                      password='pwd')
+            if self.connection.is_connected():
+                db_Info = self.connection.get_server_info()
+                print("Connected to MySQL Server version ", db_Info)
+                self.cursor = self.connection.cursor()
+                self.cursor.execute("select database();")
+                record = self.cursor.fetchone()
+                print("You're connected to database: ", record)
+
+        except Error as e:
+            print("Error while connecting to MySQL", e)
 
         # This is the section of code which creates the main window
         
@@ -86,16 +114,46 @@ class RegisterGUI:
             'arial', 20, 'normal')).place(x=w, y=self.framerow1height)
 
         self.btn_frcg = Button(self.my_w_child, text='Facial Recognition', font=(
-            'arial', 12, 'normal'), command=self.read_facial).place(x=w, y=self.framerow1height + self.videocanvasheight + 60)
+            'arial', 12, 'normal'), command=self.read_facial)
+            
+        self.btn_frcg.place(x=w, y=self.framerow1height + self.videocanvasheight + 60)
+
+        self.btn_frcg.config(state=tk.DISABLED)
 
         ##################################################### FINGERPRINT #####################################################
 
         w = self.framerow_center + self.videocanvaswidth + 100
-        self.lbl_card_info = Label(self.my_w_child, text='Facial Recognition', font=(
+        self.lbl_card_info = Label(self.my_w_child, text='Read Fingerprint', font=(
             'arial', 20, 'normal')).place(x=w, y=self.framerow1height)
 
         self.btn_fgp = Button(self.my_w_child, text='Read Fingerprint', font=(
-            'arial', 12, 'normal'), command=self.read_fingerprint).place(x=w, y=self.framerow1height + 50)
+            'arial', 12, 'normal'), command=self.read_fingerprint)
+            
+        self.btn_fgp.place(x=w, y=self.framerow1height + 50)
+
+        self.btn_fgp.config(state=tk.DISABLED)
+
+        ##################################################### ENROLL #####################################################
+
+        w = self.framerow_center
+
+        self.btn_enroll = Button(self.my_w_child, text='Enroll', font=(
+            'arial', 12, 'normal'), command=self.enroll).place(x=w, y=self.framerow2height)
+
+    def enroll(self):
+        if self.state['card_read'] == 1:
+            if self.state['facial_recognition'] + self.state['fingerprint_recognition'] > 0:
+                # Insert new user
+                user_insert_query = """ INSERT INTO users
+                               (cc_number, given_name, surname, bio_data_location) VALUES (%s,%s,%s,%s)"""
+                user = (self.user['SERIAL_NUMBER'], self.user['GIVEN_NAME'], self.user['SURNAME'], "bio_data/" + self.user['SERIAL_NUMBER'])
+                self.cursor.execute(user_insert_query, user)
+                print("Enrolled.")
+                self.my_w_child.destroy()
+            else:
+                print("Can't enroll. Need at least 1 biometric authentication factor.")
+        else:
+            print("Can't enroll. Card not read.")
 
     def verify_cc(self):
         '''
@@ -170,13 +228,21 @@ class RegisterGUI:
 
         self.lbl_card_name = Label(self.my_w_child, text=userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER'],
                                    font=('arial', 12, 'normal')).place(x=52, y=107)
+        
+        
+        if self.cursor.rowcount > 0:
+            self.lbl_card_rest = Label(self.my_w_child, text='User already exists.', bg='#FF0000', font=(
+                'arial', 12, 'normal')).place(x=52, y=197)
 
-        if self.cursor.rowcount >= 1:
-            self.lbl_card_rest = Label(self.my_w_child, text='User exists, proceed to biometric auth...', bg='#00FF00', font=(
-                'arial', 12, 'normal')).place(x=52, y=197)
         else:
-            self.lbl_card_rest = Label(self.my_w_child, text="User doesn't exist. Access denied.", bg='#FF0000', font=(
+            self.lbl_card_rest = Label(self.my_w_child, text="Card read. Proceed...", bg='#00FF00', font=(
                 'arial', 12, 'normal')).place(x=52, y=197)
+            self.user_id = userInfo['SERIAL_NUMBER']
+            self.user['SERIAL_NUMBER'] = userInfo['SERIAL_NUMBER']
+            self.user['GIVEN_NAME'] = userInfo['GIVEN_NAME']
+            self.user['SURNAME'] = userInfo['SURNAME']
+            self.state['card_read'] = 1
+            self.btn_frcg.config(state=tk.NORMAL) 
 
         return cert_bytes, userInfo, private_key, session
 
@@ -197,19 +263,19 @@ class RegisterGUI:
         Video_Feed.place(x=self.framerow_center, y=self.framerow1height + 50)
 
     # this is the function called when the button is clicked
-    def read_facial(self):
-        camera = cv2.VideoCapture(0)
-
+    def read_facial(self, user_id=5):
+        camera = cv2.VideoCapture('http://192.168.1.215:8080/video')
+        counter = 0
         while True:
             return_value, image = camera.read()
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            cv2.imshow('image')
+            cv2.imshow('image',image)
             if cv2.waitKey(1) & 0xFF == ord('s'):
                 image = cv2.resize(image, (0, 0), fx=0.6, fy=0.6)
                 image = cv2.resize(image, (400, 400))
 
-                cv2.imwrite('img/selfie.png', image)
-                img = cv2.imread('img/selfie.png', cv2.IMREAD_UNCHANGED)
+                cv2.imwrite(f'img/{self.user_id}_{counter}.png', image)
+                img = cv2.imread(f'img/{self.user_id}_{counter}.png', cv2.IMREAD_UNCHANGED)
                 scale_percent = 80
                 width = int(img.shape[1] * scale_percent / 100)
                 height = int(img.shape[0] * scale_percent / 100)
@@ -217,15 +283,29 @@ class RegisterGUI:
 
                 cv2.resize(img, dsize)
 
-                cv2.imwrite('img/selfie.png', img)
+                cv2.imwrite(f'img/{self.user_id}_{counter}.png', img)
 
-                self.create_image('img/selfie.png')
+                self.create_image(f'img/{self.user_id}_{counter}.png')
 
+                counter+=1
+            
+            if counter >= 5:
                 break
-
+        
         camera.release()
         cv2.destroyAllWindows()
 
+
+        current_directory = os.getcwd()
+        final_directory = os.path.join(current_directory, f'backend/bio_data/{self.user_id}')
+        temp_directory = os.path.join(current_directory, f'img')
+        print(final_directory)
+        if not os.path.exists(final_directory):
+            os.makedirs(final_directory)
+        for i in range(5):
+            os.rename(f'{temp_directory}/{self.user_id}_{i}.png', f'{final_directory}/{i}.png')
+        self.state['facial_recognition'] = 1
+        
 
 if __name__ == "__main__":
     gui = RegisterGUI()
