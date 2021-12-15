@@ -1,2 +1,4 @@
-FROM mysql:8
+#FROM mysql/mysql-server
+#FROM mariadb
+FROM hypriot/rpi-mysql
 RUN echo "default-authentication-plugin=mysql_native_password" >> /etc/mysql/my.cnf
