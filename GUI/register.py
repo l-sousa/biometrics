@@ -18,7 +18,8 @@ from cryptography import x509
 import mysql.connector
 from mysql.connector import Error
 import PIL.Image
-
+import face_recognition
+import numpy as np
 from PIL import ImageTk
 
 
@@ -145,13 +146,30 @@ class RegisterGUI:
     def enroll(self):
         if self.state['card_read'] == 1:
             if self.state['facial_recognition'] + self.state['fingerprint_recognition'] > 0:
+                
                 # Insert new user
+                
+                # If facial rec -> move images to bio_images
+                if self.state['facial_recognition'] == 1:
+                    current_directory = os.getcwd()
+                    final_directory = os.path.join(current_directory, f'../backend/bio_data/{self.user_id}')
+                    temp_directory = os.path.join(current_directory, '../img')
+                    print(final_directory)
+                    if not os.path.exists(final_directory):
+                        os.makedirs(final_directory)
+                    #for i in range(5):
+                    os.rename(f'{temp_directory}/{self.user_id}/{self.user_id}_facial_features.npy', f'{final_directory}/{self.user_id}_facial_features.npy')
+                
+                # Insert user in databse
                 user_insert_query = """ INSERT INTO users
-                               (cc_number, given_name, surname, bio_data_location) VALUES (%s,%s,%s,%s)"""
-                user = (self.user['SERIAL_NUMBER'], self.user['GIVEN_NAME'], self.user['SURNAME'], "bio_data/" + self.user['SERIAL_NUMBER'])
+                               (cc_number, given_name, surname, bio_data_location, has_facial, has_fingerprint) VALUES (%s,%s,%s,%s,%s,%s)"""
+                user = (self.user['SERIAL_NUMBER'], self.user['GIVEN_NAME'], self.user['SURNAME'], "bio_data/" + self.user['SERIAL_NUMBER'],self.state['facial_recognition'],self.state['fingerprint_recognition'])
                 self.cursor.execute(user_insert_query, user)
+                
                 print("Enrolled.")
+                
                 self.my_w_child.destroy()
+                
             else:
                 print("Can't enroll. Need at least 1 biometric authentication factor.")
         else:
@@ -263,52 +281,50 @@ class RegisterGUI:
         # <-- you will have to copy-paste the filepath here, for example 'C:\Desktop\pic.gif'
         self.picture_file = PhotoImage(file=file)
         # Finally, we create the image on the canvas and then place it onto the main window
-        Video_Feed.create_image(400, 0, anchor=NE, image=self.picture_file)
+        Video_Feed.create_image(500, 0, anchor=NE, image=self.picture_file)
         Video_Feed.place(x=self.framerow_center, y=self.framerow1height + 50)
 
     # this is the function called when the button is clicked
     def read_facial(self, user_id=5):
-        camera = cv2.VideoCapture('http://192.168.1.215:8080/video')
-        counter = 0
+        camera = cv2.VideoCapture(0)
+        #counter = 0
+        
+        process_this_frame = True
         while True:
             return_value, image = camera.read()
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            cv2.imshow('image',image)
-            if cv2.waitKey(1) & 0xFF == ord('s'):
-                image = cv2.resize(image, (0, 0), fx=0.6, fy=0.6)
-                image = cv2.resize(image, (400, 400))
-
-                cv2.imwrite(f'img/{self.user_id}_{counter}.png', image)
-                img = cv2.imread(f'img/{self.user_id}_{counter}.png', cv2.IMREAD_UNCHANGED)
-                scale_percent = 80
-                width = int(img.shape[1] * scale_percent / 100)
-                height = int(img.shape[0] * scale_percent / 100)
-                dsize = (width, height)
-
-                cv2.resize(img, dsize)
-
-                cv2.imwrite(f'img/{self.user_id}_{counter}.png', img)
-
-                self.create_image(f'img/{self.user_id}_{counter}.png')
-
-                counter+=1
+            small_image = cv2.resize(image, (0, 0), fx=0.25, fy=0.25)
+            #gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             
-            if counter >= 5:
+            if process_this_frame:
+                user_encodings_list = face_recognition.face_encodings(np.array(PIL.Image.fromarray(small_image)))
+
+                if user_encodings_list:
+                    if not os.path.exists(os.path.join(os.getcwd(), f'../img/{self.user_id}')):
+                        os.makedirs(os.path.join(os.getcwd(), f'../img/{self.user_id}'))
+                    np.save(os.path.join(os.getcwd(), f'../img/{self.user_id}/{self.user_id}_facial_features.npy'),user_encodings_list[0])
+                    image = cv2.resize(image, (0, 0), fx=0.8, fy=0.8)
+                    img_dir = os.path.join(os.getcwd(), f'../img/{self.user_id}_0.png')
+                    cv2.imwrite(img_dir, image)
+                    self.create_image(img_dir)
+                    self.state['facial_recognition'] = 1
+                    break
+            
+            process_this_frame = not process_this_frame
+            cv2.imshow('image',image)
+                   
+            if cv2.waitKey(1) & 0xFF == ord('s'):
+                image = cv2.resize(image, (0, 0), fx=0.8, fy=0.8)
+                # image = cv2.resize(image, (400, 400))
+                
+                img_dir = os.path.join(os.getcwd(), f'../img/{self.user_id}_0.png')
+                cv2.imwrite(img_dir, image)
+                self.create_image(img_dir)
                 break
-        
+
         camera.release()
         cv2.destroyAllWindows()
 
-
-        current_directory = os.getcwd()
-        final_directory = os.path.join(current_directory, f'backend/bio_data/{self.user_id}')
-        temp_directory = os.path.join(current_directory, f'img')
-        print(final_directory)
-        if not os.path.exists(final_directory):
-            os.makedirs(final_directory)
-        for i in range(5):
-            os.rename(f'{temp_directory}/{self.user_id}_{i}.png', f'{final_directory}/{i}.png')
-        self.state['facial_recognition'] = 1
+        
         
 
 if __name__ == "__main__":
