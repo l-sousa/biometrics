@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS `users` (
   `given_name` varchar(255) NOT NULL,
   `surname` varchar(255) NOT NULL,
   `bio_data_location` varchar(255) NOT NULL,
+  `has_facial` boolean NOT NULL,
+  `has_fingerprint` boolean NOT NULL,
   PRIMARY KEY (`cc_number`)
 ) ENGINE=MyISAM AUTO_INCREMENT=3 DEFAULT CHARSET=latin1;
 
@@ -26,7 +28,7 @@ CREATE TABLE IF NOT EXISTS `users` (
 -- Dumping data for table `users`
 --
 
-INSERT INTO `users` (`cc_number`, `given_name`, `surname`, `bio_data_location`) VALUES
-('BI152665714', 'DUARTE', 'NEVES TAVARES MORTÁGUA', 'bio_data/BI152665714');
+INSERT INTO `users` (`cc_number`, `given_name`, `surname`, `bio_data_location`, `has_facial`, `has_fingerprint`) VALUES
+('BI152665714', 'DUARTE', 'NEVES TAVARES MORTÁGUA', 'bio_data/BI152665714', 0, 0);
 
 -- --------------------------------------------------------
