@@ -1,6 +1,12 @@
 backend/data/mysql/*
 !backend/data/mysql/.gitkeep
 
+backend/bio_data/*
+img/*
+tests/*
+GUI/enhance
+GUI/compare_fingerprints.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
