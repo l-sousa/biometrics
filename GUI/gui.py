@@ -23,6 +23,11 @@ import numpy as np
 
 from PIL import ImageTk
 
+import time
+import serial
+
+import adafruit_fingerprint
+
 from register import RegisterGUI
 import face_recognition
 
@@ -38,10 +43,11 @@ class GUI:
             'SURNAME' : None,
             'BIO_DATA_LOCATION' : None,
             'HAS_FACIAL' : False,
-            'HAS_FINGERPRINT' : False
+            'HAS_FINGERPRINT' : False,
+            'FINGERPRINT_ID_SENSOR': None
         }
 
-        self.state = {'card_read' : 0, 'facial_recognition' : 0, 'fingerprint_recognition' : 0, 'approved' : 0}
+        self.state = {'card_read' : 0, 'facial_recognition' : 0, 'fingerprint_recognition' : 0, 'authorized' : 0}
 
         # DB connection
         try:
@@ -60,16 +66,21 @@ class GUI:
         except Error as e:
             print("Error while connecting to MySQL", e)
 
+
+        # Fingerprint Sensor connection
+        self.uart = serial.Serial("/dev/ttyUSB0", baudrate=57600, timeout=1)
+        self.finger = adafruit_fingerprint.Adafruit_Fingerprint(self.uart)
+
         # This is the section of code which creates the main window
 
         self.frame_width = 1600
-        self.frame_height = 900
-        self.root.geometry('1600x900')
+        self.frame_height = 600
+        self.root.geometry('1600x600')
         self.root.configure()
         self.root.title('Biometric System')
 
         self.framerow1height = self.frame_height/10
-        self.framerow2height = self.frame_height/1.5
+        self.framerow2height = self.frame_height/1.1
 
         self.framerow_center = self.frame_width/3
 
@@ -83,7 +94,9 @@ class GUI:
             'arial', 20, 'normal')).place(x=w, y=self.framerow1height)
 
         self.lbl_card_name = Label(self.root, text='',
-                                   font=('arial', 12, 'normal')).place(x=w, y=self.framerow1height + 50)
+                                   font=('arial', 12, 'normal'))
+                                   
+        self.lbl_card_name.place(x=w, y=self.framerow1height + 50)
 
         self.lbl_card_nif = Label(self.root, text='',
                                   font=('arial', 12, 'normal')).place(x=w, y=self.framerow1height + 100)
@@ -91,10 +104,17 @@ class GUI:
         self.lbl_card_gender = Label(self.root, text='', font=(
             'arial', 12, 'normal')).place(x=w, y=self.framerow1height + 150)
 
+        self.lbl_card_rest = Label(self.root, text='', font=(
+            'arial', 12, 'normal'))
+            
+        self.lbl_card_rest.place(x=self.framerow_center / 5, y=self.framerow1height + 100)
+
         self.btn_cc = Button(self.root, text='Read CC Card', font=(
             'arial', 12, 'normal'), command=self.read_cc).place(x=w, y=self.framerow1height + 150)
-
+        
+        
         ##################################################### FACIAL #####################################################
+        
         self.create_image()
         w = self.framerow_center
 
@@ -108,10 +128,14 @@ class GUI:
 
         self.btn_frcg.config(state=tk.DISABLED)
 
+        self.lbl_facial_rest = Label(self.root, text='', bg='#000000', font=('arial', 12, 'normal'))
+
+        self.lbl_facial_rest.place(x=self.framerow_center + 250, y=self.framerow1height + self.videocanvasheight + 60)
+
         ##################################################### FINGERPRINT #####################################################
 
         w = self.framerow_center + self.videocanvaswidth + 100
-        self.lbl_card_info = Label(self.root, text='Facial Recognition', font=(
+        self.lbl_card_info = Label(self.root, text='Fingerprint Recognition', font=(
             'arial', 20, 'normal')).place(x=w, y=self.framerow1height)
 
         self.btn_fgp = Button(self.root, text='Read Fingerprint', font=(
@@ -121,12 +145,24 @@ class GUI:
 
         self.btn_fgp.config(state=tk.DISABLED)
 
+        self.lbl_fingerprint_rest = Label(self.root, text='', font=('arial', 12, 'normal'))
+
+        self.lbl_fingerprint_rest.place(x=w + 150, y=self.framerow1height + 100)
+
         ##################################################### ENROLL #####################################################
 
         w = self.framerow_center
 
         self.btn_register = Button(self.root, text='Register', font=(
             'arial', 12, 'normal'), command=self.register).place(x=w, y=self.framerow2height)
+
+        
+        ############################################ ACCESS FEEDBACK #####################################################
+        
+        self.label_access_feedback = Label(self.root, text='ACCESS DENIED.', font=('arial', 16, 'normal'), bg='#FF0000')
+                                   
+        self.label_access_feedback.place(x=self.framerow_center / 5, y=self.framerow2height)
+
 
     def register(self):
         RegisterGUI(self.root)
@@ -151,123 +187,146 @@ class GUI:
             exit(0)
 
     def read_cc(self):
-        '''
-        Needed info is retrieved from the Citizen Card:
-        Name, serial number (Civil ID), Auth PrivKey and Citizen Authentication Cerificate.
-        '''
+        
+        user_info = None
+        card_read = False
         print("Reading Citizen card...")
         pkcs11 = self.verify_cc()
         print("Retrieving data from CC...")
-        slot = pkcs11.getSlotList(tokenPresent=True)[0]
-        all_attr = list(PyKCS11.CKA.keys())
-        all_attr = [e for e in all_attr if isinstance(e, int)]
-        session = pkcs11.openSession(slot)
-        userInfo = dict()
-        for obj in session.findObjects():
-            # Get object attributes
-            attr = session.getAttributeValue(obj, all_attr)
-            # Create dictionary with attributes
-            attr = dict(zip(map(PyKCS11.CKA.get, all_attr), attr))
-            if attr['CKA_LABEL'] == 'CITIZEN AUTHENTICATION CERTIFICATE':
-                if attr['CKA_CERTIFICATE_TYPE'] != None:
-                    cert_bytes = bytes(attr['CKA_VALUE'])
-                    cert = x509.load_der_x509_certificate(
-                        cert_bytes, backend=default_backend())
-                    userInfo['GIVEN_NAME'] = cert.subject.get_attributes_for_oid(
-                        x509.NameOID.GIVEN_NAME)[0].value
-                    userInfo['SURNAME'] = cert.subject.get_attributes_for_oid(x509.NameOID.SURNAME)[
-                        0].value
-                    userInfo['SERIAL_NUMBER'] = cert.subject.get_attributes_for_oid(
-                        x509.NameOID.SERIAL_NUMBER)[0].value
+        try:
+            slot = pkcs11.getSlotList(tokenPresent=True)[0]
+            all_attr = list(PyKCS11.CKA.keys())
+            all_attr = [e for e in all_attr if isinstance(e, int)]
+            session = pkcs11.openSession(slot)
+            userInfo = dict()
+            for obj in session.findObjects():
+                # Get object attributes
+                attr = session.getAttributeValue(obj, all_attr)
+                # Create dictionary with attributes
+                attr = dict(zip(map(PyKCS11.CKA.get, all_attr), attr))
+                if attr['CKA_LABEL'] == 'CITIZEN AUTHENTICATION CERTIFICATE':
+                    if attr['CKA_CERTIFICATE_TYPE'] != None:
+                        cert_bytes = bytes(attr['CKA_VALUE'])
+                        cert = x509.load_der_x509_certificate(
+                            cert_bytes, backend=default_backend())
+                        userInfo['GIVEN_NAME'] = cert.subject.get_attributes_for_oid(
+                            x509.NameOID.GIVEN_NAME)[0].value
+                        userInfo['SURNAME'] = cert.subject.get_attributes_for_oid(x509.NameOID.SURNAME)[
+                            0].value
+                        userInfo['SERIAL_NUMBER'] = cert.subject.get_attributes_for_oid(
+                            x509.NameOID.SERIAL_NUMBER)[0].value
 
-        private_key = session.findObjects([
-            (PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY),
-            (PyKCS11.CKA_LABEL, 'CITIZEN AUTHENTICATION KEY')
-        ])[0]
+            private_key = session.findObjects([
+                (PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY),
+                (PyKCS11.CKA_LABEL, 'CITIZEN AUTHENTICATION KEY')
+            ])[0]
+            card_read= True
+        except IndexError as e:
+            self.lbl_card_rest.config(text="Invalid or non-existing Citizen Card.", bg='#FF0000')
+            self.lbl_card_name.config(text='')
+            self.lbl_fingerprint_rest.config(text='')
+            print("Invalid or non-existing Citizen Card.")
 
-        print("USER INFO:")
-        pprint(userInfo)
+        if card_read:
+            print("USER INFO:")
+            pprint(userInfo)
 
-        # # Insert new user
-        # sql_insert_query = """ INSERT INTO users
-        #                (cc_number, given_name, surname, bio_data_location) VALUES (%s,%s,%s,%s)"""
-        # # tuple to insert at placeholder
-        # user = (userInfo['GIVEN_NAME'], userInfo['SURNAME'], userInfo['SERIAL_NUMBER'], "bio_data/" + userInfo['SERIAL_NUMBER'])
+            # Check if user exists
+            user_select_query = f"SELECT * FROM users WHERE cc_number = '{userInfo['SERIAL_NUMBER']}'"
+            user_id = (userInfo['SERIAL_NUMBER'])
 
-        # Check if user exists
-        user_select_query = f"SELECT * FROM users WHERE cc_number = '{userInfo['SERIAL_NUMBER']}'"
-        user_id = (userInfo['SERIAL_NUMBER'])
+            self.cursor.execute(user_select_query)
+            records = self.cursor.fetchall()
+            print("Users match: ", self.cursor.rowcount)
 
-        self.cursor.execute(user_select_query)
-        records = self.cursor.fetchall()
-        print("Users match: ", self.cursor.rowcount)
+            # Show users info
+            self.lbl_card_name.config(text=f"{userInfo['GIVEN_NAME']} {userInfo['SURNAME']}\n{userInfo['SERIAL_NUMBER']}")
 
-        self.lbl_card_name = Label(self.root, text=userInfo['GIVEN_NAME'] + " " + userInfo['SURNAME'] + "\n" + userInfo['SERIAL_NUMBER'],
-                                   font=('arial', 12, 'normal')).place(x=52, y=107)
+            # User exists. Allow read face and/or finger
+            if self.cursor.rowcount >= 1:
+                
+                self.lbl_card_rest.config(text='User exists, proceed to biometric auth...', bg='#00FF00')
 
-        # User exists. Allow read face and/or finger
-        if self.cursor.rowcount >= 1:
-            
-            self.lbl_card_rest = Label(self.root, text='User exists, proceed to biometric auth...', bg='#00FF00', font=(
-                'arial', 12, 'normal')).place(x=52, y=197)
-            
-            user_data = records[0]
-            
-            self.user_id = user_data[0]
-            self.user['SERIAL_NUMBER'] = user_data[0]
-            self.user['GIVEN_NAME'] = user_data[1]
-            self.user['SURNAME'] = user_data[2]
-            self.user['BIO_DATA_LOCATION'] = user_data[3]
-            self.user['HAS_FACIAL'] = user_data[4]
-            self.user['HAS_FINGERPRINT'] = user_data[5]
+                user_data = records[0]
+                
+                self.user_id = user_data[0]
+                self.user['SERIAL_NUMBER'] = user_data[0]
+                self.user['GIVEN_NAME'] = user_data[1]
+                self.user['SURNAME'] = user_data[2]
+                self.user['BIO_DATA_LOCATION'] = user_data[3]
+                self.user['HAS_FACIAL'] = user_data[4]
+                self.user['HAS_FINGERPRINT'] = user_data[5]
+                self.user['FINGERPRINT_ID_SENSOR'] = user_data[6]
 
-            # Activate respective buttons
-            print(f"has facial -> {self.user['HAS_FACIAL']}, {type(self.user['HAS_FACIAL'])}")
-            if self.user['HAS_FACIAL']:
-                self.btn_frcg.config(state=tk.NORMAL)
-            if self.user['HAS_FINGERPRINT']:
-                self.btn_fgp.config(state=tk.NORMAL)
-            
-            # Card has been read
-            self.state['card_read'] = 1
-            self.state['facial_recognition'] = 0
-            self.state['fingerprint_recognition'] = 0
-            self.state['approved'] = 0
-            
-        else:
-            self.lbl_card_rest = Label(self.root, text="User doesn't exist. Access denied.", bg='#FF0000', font=(
-                'arial', 12, 'normal')).place(x=52, y=197)
-
-            self.user['SERIAL_NUMBER'] = None
-            self.user['GIVEN_NAME'] = None
-            self.user['SURNAME'] = None
-            self.user['BIO_DATA_LOCATION'] = None
-            self.user['HAS_FACIAL'] = False
-            self.user['HAS_FINGERPRINT'] = False
-
-            # Activate respective buttons
-            print(f"has facial -> {self.user['HAS_FACIAL']}, {type(self.user['HAS_FACIAL'])}")
-            if self.user['HAS_FACIAL']:
-                self.btn_frcg.config(state=tk.NORMAL)
+                # Activate respective buttons
+                print(f"has facial -> {self.user['HAS_FACIAL']}\nhas finger -> {self.user['HAS_FINGERPRINT']}")
+                if self.user['HAS_FACIAL']:
+                    self.btn_frcg.config(state=tk.NORMAL)
+                if self.user['HAS_FINGERPRINT']:
+                    self.btn_fgp.config(state=tk.NORMAL)
+                
+                # Card has been read
+                self.state['card_read'] = 1
+                self.state['facial_recognition'] = 0
+                self.state['fingerprint_recognition'] = 0
+                self.state['approved'] = 0
+                
             else:
-                self.btn_frcg.config(state=tk.DISABLED)
-            if self.user['HAS_FINGERPRINT']:
-                self.btn_fgp.config(state=tk.NORMAL)
-            else:
-                self.btn_fgp.config(state=tk.DISABLED) 
-            
-            # Card has not been read, reset values
-            self.state['card_read'] = 0
-            self.state['facial_recognition'] = 0
-            self.state['fingerprint_recognition'] = 0
-            self.state['approved'] = 0
+                self.lbl_card_rest.config(text="Access denied. User doesn't exist.", bg='#FF0000')
+                self.lbl_fingerprint_rest.config(text='')
+                self.lbl_facial_rest.config(text='')
 
-        return cert_bytes, userInfo, private_key, session
+                self.user['SERIAL_NUMBER'] = None
+                self.user['GIVEN_NAME'] = None
+                self.user['SURNAME'] = None
+                self.user['BIO_DATA_LOCATION'] = None
+                self.user['HAS_FACIAL'] = False
+                self.user['HAS_FINGERPRINT'] = False
+                self.user['FINGERPRINT_ID_SENSOR'] = None
+
+                # Activate respective buttons
+                print(f"has facial -> {self.user['HAS_FACIAL']}, {type(self.user['HAS_FACIAL'])}")
+                if self.user['HAS_FACIAL']:
+                    self.btn_frcg.config(state=tk.NORMAL)
+                else:
+                    self.btn_frcg.config(state=tk.DISABLED)
+                if self.user['HAS_FINGERPRINT']:
+                    self.btn_fgp.config(state=tk.NORMAL)
+                else:
+                    self.btn_fgp.config(state=tk.DISABLED) 
+                
+                # Card has not been read, reset values
+                self.state['card_read'] = 0
+                self.state['facial_recognition'] = 0
+                self.state['fingerprint_recognition'] = 0
+                self.state['approved'] = 0
+            
+            self.check_if_access_granted()
 
     # this is the function called when the button is clicked
 
     def read_fingerprint(self):
-        print('clicked')
+        match = False
+        if self.get_fingerprint():
+            print("Detected #", self.finger.finger_id, "with confidence", self.finger.confidence)
+            finger_id = self.finger.finger_id
+            # Read finger is the same id as users -> match
+            if finger_id == self.user['FINGERPRINT_ID_SENSOR']:
+                match = True
+            # Finger doesnt match
+            else:
+                self.lbl_fingerprint_rest.config(text="Fingers don't match.", bg='#FF0000')
+        else:
+            print("Finger not found. Try again.")
+            self.lbl_fingerprint_rest.config(text="Fingers don't match.", bg='#FF0000')
+        
+        if match:
+            self.lbl_fingerprint_rest.config(text='Fingerprint read OK.', bg='#00FF00')
+            self.state['fingerprint_recognition'] = 1
+        else:
+            self.state['fingerprint_recognition'] = 0
+        
+        self.check_if_access_granted()
 
     def create_image(self, file=""):
         # First, we create a canvas to put the picture on
@@ -296,7 +355,7 @@ class GUI:
         process_this_frame = True
         
         while True:
-            find = False
+            match = False
             ret, frame = video_capture.read()
 
             small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
@@ -317,14 +376,12 @@ class GUI:
                     best_match_index = np.argmin(face_distances)
                     if matches[best_match_index]:
                         name = known_face_names[best_match_index]
-                        self.state['facial_recognition'] = 1
-                        
-                        find = True
+                        match = True
                         break
 
                     face_names.append(name)
 
-                if find:
+                if match:
                     break
 
             process_this_frame = not process_this_frame
@@ -347,17 +404,47 @@ class GUI:
         img_dir = os.path.join(os.getcwd(), f'../img/{self.user_id}_match_temp.png')
         cv2.imwrite(img_dir, frame)
         self.create_image(img_dir)
+
         print(f"facial rec -> {self.state['facial_recognition']}")
-        self.lbl_facial_rest = Label(self.root, text='', bg='#000000', font=(
-                'arial', 12, 'normal'))
-        self.lbl_facial_rest.place(x=self.framerow_center + 250, y=self.framerow1height + self.videocanvasheight + 60)
-        if find:
+
+        if match:
             self.lbl_facial_rest.config(text = 'Facial recognition passed!', bg = '#00FF00')
+            self.state['facial_recognition'] = 1
         else:
             self.lbl_facial_rest.config(text = 'Facial recognition failed!', bg = '#FF0000')
+            self.state['facial_recognition'] = 0
+        
         video_capture.release()
         cv2.destroyAllWindows()
 
+        self.check_if_access_granted()
+
+    def get_fingerprint(self):
+        print("Waiting for image...")
+        while self.finger.get_image() != adafruit_fingerprint.OK:
+            pass
+        print("Templating...")
+        if self.finger.image_2_tz(1) != adafruit_fingerprint.OK:
+            return False
+        print("Searching...")
+        if self.finger.finger_search() != adafruit_fingerprint.OK:
+            return False
+        return True
+
+    def check_if_access_granted(self):
+        bio_count = 0
+        if self.user['HAS_FACIAL']:
+            bio_count += 1
+        if self.user['HAS_FINGERPRINT']:
+            bio_count += 1
+        if self.state['card_read'] + self.state['fingerprint_recognition'] + self.state['facial_recognition'] >= bio_count + 1:
+            print("Access is granted.")
+            self.label_access_feedback.config(text='ACCESS GRANTED.', bg='#00FF00')
+            return True
+        else:
+            print("Access is denied.")
+            self.label_access_feedback.config(text='ACCESS DENIED.', bg='#FF0000')
+            return False
 
 if __name__ == "__main__":
     gui = GUI()
