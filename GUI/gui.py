@@ -1,35 +1,31 @@
-from abc import abstractmethod
-from os import name
 import os
 import tkinter as tk
-from tkinter import ttk
 from tkinter import *
 import cv2
 from pprint import pprint
 import PyKCS11
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.backends.interfaces import DHBackend
-from cryptography.hazmat.primitives.asymmetric import dh
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography import x509
 import mysql.connector
 from mysql.connector import Error
 import PIL.Image
 import time
+from mysql.connector.constants import NET_BUFFER_LENGTH
 import numpy as np
-
 from PIL import ImageTk
-
 import time
 import serial
-
 import adafruit_fingerprint
-
 from register import RegisterGUI
 import face_recognition
+import copy
+
+# ML and auxiliary packages
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.models import load_model
+import imutils
+import pickle
+
 
 class GUI:
 
@@ -86,6 +82,18 @@ class GUI:
 
         self.videocanvasheight = 375
         self.videocanvaswidth = 500
+
+        ### Load ML models ###
+        # load our serialized face detector from disk
+        print("[INFO] loading face detector...")
+        protoPath = os.path.join(os.getcwd(), '../ml_model/face_detector/deploy.prototxt')
+        modelPath = os.path.join(os.getcwd(), '../ml_model/face_detector/res10_300x300_ssd_iter_140000.caffemodel')
+        self.net = cv2.dnn.readNetFromCaffe(protoPath, modelPath)
+
+        # load the liveness detector model and label encoder from disk
+        print("[INFO] loading liveness detector...")
+        self.model = load_model(os.path.join(os.getcwd(), '../ml_model/liveness.model_22'))
+        self.le = pickle.loads(open(os.path.join(os.getcwd(), '../ml_model/le.pickle'), "rb").read())
 
         ##################################################### CC #####################################################
         w = self.framerow_center / 5
@@ -165,7 +173,7 @@ class GUI:
 
 
     def register(self):
-        RegisterGUI(self.root)
+        RegisterGUI(self.root, self.net, self.model, self.le)
 
     def verify_cc(self):
         '''
@@ -341,80 +349,189 @@ class GUI:
 
     # this is the function called when the button is clicked
     def read_facial(self, user_id=5):
-        
-        user_encodings = np.load(os.path.join(os.getcwd(), f"../backend/{self.user['BIO_DATA_LOCATION']}/{self.user_id}_facial_features.npy"))
 
-        known_face_encodings = [user_encodings]
-        known_face_names = [self.user['SERIAL_NUMBER']]
-        
-        video_capture = cv2.VideoCapture(0)
+        vs = cv2.VideoCapture(0)
+        frame_counter = 0 # Total frames read
+        useful_frame_counter = 0 # Total frames with > 50% liveness
+        match = None
+        cached_startX, cached_startY = 0,0
+        liveness_counter = 0
+        frames_list = []
+        preds_list = []
 
-        face_locations = []
-        face_encodings = []
-        face_names = []
-        process_this_frame = True
-        
         while True:
-            match = False
-            ret, frame = video_capture.read()
-
-            small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-
-            rgb_small_frame = small_frame[:, :, ::-1]
-
-            if process_this_frame:
-                face_locations = face_recognition.face_locations(rgb_small_frame)
-                face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-
-                face_names = []
-                for face_encoding in face_encodings:
-                    matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-                    name = "Unknown"
-
             
-                    face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-                    best_match_index = np.argmin(face_distances)
-                    if matches[best_match_index]:
-                        name = known_face_names[best_match_index]
-                        match = True
-                        break
+            # More one frame read
+            frame_counter += 1
 
-                    face_names.append(name)
+            # Read frame from camera
+            _, frame = vs.read()
+            
+            # Resize frame and make copy for later
+            cached_frame = copy.deepcopy(frame)
+            frame = imutils.resize(frame, height=480, width=640)
+            
+            # Indications to print frame
+            out_frame_indications = None
+            
+            (h, w) = frame.shape[:2]
+            blob = cv2.dnn.blobFromImage(cv2.resize(frame, (300, 300)), 1.0,
+                (300, 300), (104.0, 177.0, 123.0))
 
-                if match:
-                    break
+            self.net.setInput(blob)
+            detections = self.net.forward()
 
-            process_this_frame = not process_this_frame
-            # Caixa
-            for (top, right, bottom, left), name in zip(face_locations, face_names):
-                top *= 4
-                right *= 4
-                bottom *= 4
-                left *= 4
-                cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
-                cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
-                font = cv2.FONT_HERSHEY_DUPLEX
-                cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
+            for i in range(0, detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                
+                # Useful frame
+                if confidence > 0.5:
+                    
+                    box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                    (startX, startY, endX, endY) = box.astype("int")
+                    cached_startX, cached_startY = startX, startY
+                    startX = max(0, startX)
+                    startY = max(0, startY)
+                    endX = min(w, endX)
+                    endY = min(h, endY)
+                    try:
+                        face = frame[startY:endY, startX:endX]
+                        face = cv2.resize(face, (32, 32))
+                        face = face.astype("float") / 255.0
+                        face = img_to_array(face)
+                        face = np.expand_dims(face, axis=0)
+                    except Exception as e:
+                        print(e)
+                        continue
 
-            cv2.imshow('Video', frame)
+                    preds = self.model.predict(face)[0]
+                    j = np.argmax(preds)
+                    label = self.le.classes_[j]
+                    label = "{}: {:.4f}".format(label, preds[j])
+                    
+                    # If it's a liveness frame, it's worth to check
+                    if preds[j] > 0.5 and j == 1:
+                        
+                        print("Checking liveness frame...")
+                        
+                        # If useful frame is sequential
+                        if useful_frame_counter + 1 == frame_counter:
+                            
+                            print(f"\t{liveness_counter} sequential frames.")
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+                            # If we already have 10 sequential useful frames -> calculate liveness accuracy
+                            if liveness_counter >= 10:
+                                
+                                print("\tCalculating liveness accuracy...")
+
+                                # Liveness accuracy
+                                accuracy_avg = 0 if len(preds_list)==0 else sum(preds_list) / len(preds_list)
+
+                                print(f"\tLiveness accuracy = {accuracy_avg}")
+
+                                # If liveness accuracy > 90% -> liveness is done!
+                                if accuracy_avg > 0.9:
+                                    
+                                    print("\tLiveness - OK")
+
+                                    # Print rectangle to the camera window -> LIVENESS OK
+                                    out_frame_indications = [frame, "Liveness OK.", (0,255,255),startX, startY, endX, endY]
+
+                                    print("\t\tCalculating matching accuracy...")
+
+                                    # Liveness is done -> check actual matching to registered user
+                                    match_accuracy = self.get_matching_accuracy(frames_list)
+
+                                    print(f"\t\tMatching accuracy = {match_accuracy}")
+                                    
+                                    # If 8 in 10 frames are identic to the registered user
+                                    # we have a match.
+                                    if match_accuracy > 0.8:
+                                        print("\t\tMatching accuracy - OK")
+                                        match = True
+                                    else:
+                                        print("\t\tMatching accuracy- FAILED")
+                                        match = False
+
+                                
+                                # Bad accuracy, repeat 10 sequential useful frames
+                                else:
+                                    
+                                    print("\tLiveness - FAILED")
+
+                                    # Print rectangle to the camera window -> LIVENESS FALIED
+                                    out_frame_indications = [frame, "Liveness FAILED.", (0,0,255),startX, startY, endX, endY]
+
+                                    # If bad accuracy -> reset liveness counter, the sequential frames and the preds list -> restart liveness routine
+                                    liveness_counter = 0
+                                    useful_frame_counter = 0
+                                    frames_list = []
+                                    preds_list = []
+
+                            # If not, keep checking
+                            else:
+                                out_frame_indications = [frame, f"Checking liveness... {liveness_counter*10}%", (0,255,255),startX, startY, endX, endY]
+                        
+                        # If useful frame is not sequencial -> reset the liveness counter, the sequential frames and the preds list -> restart liveness routine
+                        else:
+                            liveness_counter = 0
+                            useful_frame_counter = 0
+                            frames_list = []
+                            preds_list = []
+                        
+
+                        # Add one liveness frame to counter
+                        liveness_counter += 1
+
+                        # Add pred to accuracy list
+                        preds_list.append(preds[j])
+
+                        # Add current frame to list
+                        frames_list.append(frame)
+
+                        # One more useful frame ( > 50% liveness )
+                        useful_frame_counter += 1
+
+                    print(f"lc -> {liveness_counter}")
+                    print(f"pl -> {preds_list}")
+                    print(f"fl_len -> {len(frames_list)}")
+                    print(f"ufc -> {useful_frame_counter}")
+                    print(f"fc -> {frame_counter}")
+                    print(f"m -> {match}")
+
+                    useful_frame_counter = frame_counter
+            
+            if out_frame_indications != None:
+                cv2.rectangle(out_frame_indications[0], (out_frame_indications[3], out_frame_indications[4]), (out_frame_indications[5], out_frame_indications[6]),out_frame_indications[2], 2)
+                cv2.putText(out_frame_indications[0], out_frame_indications[1], (out_frame_indications[3], out_frame_indications[4] - 10),cv2.FONT_HERSHEY_SIMPLEX, 0.5, out_frame_indications[2], 2)
+            
+            cv2.imshow("Frame", frame)
+
+            key = cv2.waitKey(1) & 0xFF
+            
+            # if the `q` key was pressed or match was found, terminate the checking
+            if key == ord("q") or match != None:
                 break
 
         img_dir = os.path.join(os.getcwd(), f'../img/{self.user_id}_match_temp.png')
-        cv2.imwrite(img_dir, frame)
-        self.create_image(img_dir)
 
         print(f"facial rec -> {self.state['facial_recognition']}")
 
         if match:
             self.lbl_facial_rest.config(text = 'Facial recognition passed!', bg = '#00FF00')
             self.state['facial_recognition'] = 1
+            cv2.putText(cached_frame, f"{self.user_id}", (cached_startX, cached_startY - 10),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.imwrite(img_dir, cached_frame)
         else:
             self.lbl_facial_rest.config(text = 'Facial recognition failed!', bg = '#FF0000')
             self.state['facial_recognition'] = 0
-        
-        video_capture.release()
+            cv2.putText(cached_frame, f"NOT {self.user_id}", (cached_startX, cached_startY - 10),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            cv2.imwrite(img_dir, frame)
+            
+        self.create_image(img_dir)
+        vs.release()
         cv2.destroyAllWindows()
 
         self.check_if_access_granted()
@@ -445,6 +562,43 @@ class GUI:
             print("Access is denied.")
             self.label_access_feedback.config(text='ACCESS DENIED.', bg='#FF0000')
             return False
+
+    def get_matching_accuracy(self,frames_list):
+        
+        # Retrieve known frame encodings
+        known_face_encodings = np.load(os.path.join(os.getcwd(), f"../backend/bio_data/{self.user_id}/{self.user_id}_facial_features.npy"))
+        known_face_encodings_list = [known_face_encodings]
+
+        # List that will contain the ammount of matches and dismatches
+        matches_list = []
+
+        # For each saved frame
+        for saved_frame in frames_list:
+            
+            # Retrieve frame encodings
+            saved_frame = cv2.resize(saved_frame, (0, 0), fx=0.25, fy=0.25)
+            saved_frame = saved_frame[:, :, ::-1]
+            saved_frame_encodings = face_recognition.face_encodings(saved_frame)
+
+            # If frame has encodings
+            if saved_frame_encodings:
+                matches = face_recognition.compare_faces(known_face_encodings_list, saved_frame_encodings[0])
+                face_distances = face_recognition.face_distance(known_face_encodings_list, saved_frame_encodings[0])
+                best_match_index = np.argmin(face_distances)
+
+                # Do the encodings match the saved encodings?
+                if matches[best_match_index]:
+                    # If yes, add 1 correct match to the list
+                    matches_list.append(1)
+                else:
+                    # Mark this frame as a dismatch
+                    matches_list.append(0)
+            else:
+                # Mark this frame as a dismatch
+                matches_list.append(0)
+        print("\t\tMatches list ->",matches_list)
+        return sum(matches_list) / len(matches_list)
+
 
 if __name__ == "__main__":
     gui = GUI()

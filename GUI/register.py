@@ -1,19 +1,10 @@
-from abc import abstractmethod
 import os
-from os import name
 import tkinter as tk
-from tkinter import ttk
 from tkinter import *
 import cv2
 from pprint import pprint
 import PyKCS11
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.backends.interfaces import DHBackend
-from cryptography.hazmat.primitives.asymmetric import dh
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography import x509
 import mysql.connector
 from mysql.connector import Error
@@ -21,15 +12,19 @@ import PIL.Image
 import face_recognition
 import numpy as np
 from PIL import ImageTk
-
 import time
 import serial
 import adafruit_fingerprint
-
+import copy
+# ML and auxiliary packages
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.models import load_model
+import imutils
+import pickle
 
 class RegisterGUI:
 
-    def __init__(self, main_gui_root) -> None:
+    def __init__(self, main_gui_root, root_net, root_model, root_le) -> None:
 
         # Current user and current registration state variables
         self.user_id = None
@@ -62,6 +57,19 @@ class RegisterGUI:
         # Fingerprint Sensor connection
         self.uart = serial.Serial("/dev/ttyUSB0", baudrate=57600, timeout=1)
         self.finger = adafruit_fingerprint.Adafruit_Fingerprint(self.uart)
+
+        ### Load ML models ###
+        # load our serialized face detector from disk
+        # print("[INFO] loading face detector...")
+        # protoPath = os.path.join(os.getcwd(), '../ml_model/face_detector/deploy.prototxt')
+        # modelPath = os.path.join(os.getcwd(), '../ml_model/face_detector/res10_300x300_ssd_iter_140000.caffemodel')
+        # self.net = cv2.dnn.readNetFromCaffe(protoPath, modelPath)
+
+        # # load the liveness detector model and label encoder from disk
+        # print("[INFO] loading liveness detector...")
+        # self.model = load_model(os.path.join(os.getcwd(), '../ml_model/liveness.model_2'))
+        # self.le = pickle.loads(open(os.path.join(os.getcwd(), '../ml_model/le.pickle'), "rb").read())
+        self.net, self.model, self.le = root_net, root_model, root_le
 
         # Tkinter stuff
         self.my_w_child = tk.Toplevel(main_gui_root)
@@ -359,46 +367,190 @@ class RegisterGUI:
 
     # this is the function called when the button is clicked
     def read_facial(self, user_id=5):
-        camera = cv2.VideoCapture(0)
-        #counter = 0
-        find = False
-        process_this_frame = True
-        while True:
-            return_value, image = camera.read()
-            small_image = cv2.resize(image, (0, 0), fx=0.25, fy=0.25)
-            
-            if process_this_frame:
-                user_encodings_list = face_recognition.face_encodings(np.array(PIL.Image.fromarray(small_image)))
 
-                if user_encodings_list:
-                    if not os.path.exists(os.path.join(os.getcwd(), f'../img/{self.user_id}')):
-                        os.makedirs(os.path.join(os.getcwd(), f'../img/{self.user_id}'))
-                    np.save(os.path.join(os.getcwd(), f'../img/{self.user_id}/{self.user_id}_facial_features.npy'),user_encodings_list[0])
-                    image = cv2.resize(image, (0, 0), fx=0.8, fy=0.8)
-                    img_dir = os.path.join(os.getcwd(), f'../img/{self.user_id}_0.png')
-                    cv2.imwrite(img_dir, image)
-                    self.create_image(img_dir)
-                    find = True
-                    break
+        vs = cv2.VideoCapture(0)
+        frame_counter = 0 # Total frames read
+        useful_frame_counter = 0 # Total frames with > 50% liveness
+        find = None
+        cached_frame = None
+        cached_startX, cached_startY = 0,0
+        liveness_counter = 0
+        frames_list = []
+        preds_list = []
+
+        while True:
             
-            process_this_frame = not process_this_frame
-            cv2.imshow('image',image)
-                   
-            if cv2.waitKey(1) & 0xFF == ord('s'):
-                image = cv2.resize(image, (0, 0), fx=0.8, fy=0.8)
-                img_dir = os.path.join(os.getcwd(), f'../img/{self.user_id}_0.png')
-                cv2.imwrite(img_dir, image)
-                self.create_image(img_dir)
+            # More one frame read
+            frame_counter += 1
+
+            # Read frame from camera
+            _, frame = vs.read()
+            
+            # Resize frame and make copy for later
+            cached_frame = copy.deepcopy(frame)
+            frame = imutils.resize(frame, height=480, width=640)
+            
+            # Indications to print frame
+            out_frame_indications = None
+            
+            (h, w) = frame.shape[:2]
+            blob = cv2.dnn.blobFromImage(cv2.resize(frame, (300, 300)), 1.0,
+                (300, 300), (104.0, 177.0, 123.0))
+
+            self.net.setInput(blob)
+            detections = self.net.forward()
+
+            for i in range(0, detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                
+                # Useful frame
+                if confidence > 0.5:
+                    
+                    box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                    (startX, startY, endX, endY) = box.astype("int")
+                    cached_startX, cached_startY = startX, startY
+                    startX = max(0, startX)
+                    startY = max(0, startY)
+                    endX = min(w, endX)
+                    endY = min(h, endY)
+                    try:
+                        face = frame[startY:endY, startX:endX]
+                        face = cv2.resize(face, (32, 32))
+                        face = face.astype("float") / 255.0
+                        face = img_to_array(face)
+                        face = np.expand_dims(face, axis=0)
+                    except Exception as e:
+                        print(e)
+                        continue
+
+                    preds = self.model.predict(face)[0]
+                    j = np.argmax(preds)
+                    label = self.le.classes_[j]
+                    label = "{}: {:.4f}".format(label, preds[j])
+                    
+                    # If it's a liveness frame, it's worth to check
+                    if preds[j] > 0.5 and j == 1:
+                        
+                        print("Checking liveness frame...")
+                        
+                        # If useful frame is sequential
+                        if useful_frame_counter + 1 == frame_counter:
+                            
+                            print(f"\t{liveness_counter} sequential frames.")
+
+                            # If we already have 10 sequential useful frames -> calculate liveness accuracy
+                            if liveness_counter >= 10:
+                                
+                                print("\tCalculating liveness accuracy...")
+
+                                # Liveness accuracy
+                                accuracy_avg = 0 if len(preds_list)==0 else sum(preds_list) / len(preds_list)
+
+                                print(f"\tLiveness accuracy = {accuracy_avg}")
+
+                                # If liveness accuracy > 90% -> liveness is done!
+                                if accuracy_avg > 0.9:
+                                    
+                                    print("\tLiveness - OK")
+
+                                    # Print rectangle to the camera window -> LIVENESS OK
+                                    out_frame_indications = [frame, "Liveness OK.", (0,255,255),startX, startY, endX, endY]
+
+                                    print("\t\tRetrieving and saving facial traits...")
+
+                                    # Liveness is done -> extract user facial traits and save
+                                    found_traits = self.get_facial_traits(frame)
+
+                                    # If traits, save them and job is done
+                                    if any(found_traits):
+                                        
+                                        # Create traits path if not existing
+                                        if not os.path.exists(os.path.join(os.getcwd(), f'../img/{self.user_id}')):
+                                            os.makedirs(os.path.join(os.getcwd(), f'../img/{self.user_id}'))
+                                        
+                                        # Save traits
+                                        np.save(os.path.join(os.getcwd(), f'../img/{self.user_id}/{self.user_id}_facial_features.npy'),found_traits)
+                                        
+                                        find = True
+                                        
+                                        print("\t\tFacial traits - OK")
+                                    # No traits, failure
+                                    else:
+                                        find = False
+                                        print("\t\tFacial traits not found.")
+                                        print("\t\tFacial traits - FAILED")
+
+                                # Bad accuracy, repeat 10 sequential useful frames
+                                else:
+                                    
+                                    print("\tLiveness - FAILED")
+
+                                    # Print rectangle to the camera window -> LIVENESS FALIED
+                                    out_frame_indications = [frame, "Liveness FAILED.", (0,0,255),startX, startY, endX, endY]
+
+                                    # If bad accuracy -> reset liveness counter, the sequential frames and the preds list -> restart liveness routine
+                                    liveness_counter = 0
+                                    useful_frame_counter = 0
+                                    frames_list = []
+                                    preds_list = []
+
+                            # If not, keep checking
+                            else:
+                                out_frame_indications = [frame, f"Checking liveness... {liveness_counter*10}%", (0,255,255),startX, startY, endX, endY]
+                        
+                        # If useful frame is not sequencial -> reset the liveness counter, the sequential frames and the preds list -> restart liveness routine
+                        else:
+                            liveness_counter = 0
+                            useful_frame_counter = 0
+                            frames_list = []
+                            preds_list = []
+                        
+
+                        # Add one liveness frame to counter
+                        liveness_counter += 1
+
+                        # Add pred to accuracy list
+                        preds_list.append(preds[j])
+
+                        # Add current frame to list
+                        frames_list.append(frame)
+
+                        # One more useful frame ( > 50% liveness )
+                        useful_frame_counter += 1
+
+                    print(f"lc -> {liveness_counter}")
+                    print(f"pl -> {preds_list}")
+                    print(f"fl_len -> {len(frames_list)}")
+                    print(f"ufc -> {useful_frame_counter}")
+                    print(f"fc -> {frame_counter}")
+                    print(f"f -> {find}")
+
+                    useful_frame_counter = frame_counter
+            
+            if out_frame_indications != None:
+                cv2.rectangle(out_frame_indications[0], (out_frame_indications[3], out_frame_indications[4]), (out_frame_indications[5], out_frame_indications[6]),out_frame_indications[2], 2)
+                cv2.putText(out_frame_indications[0], out_frame_indications[1], (out_frame_indications[3], out_frame_indications[4] - 10),cv2.FONT_HERSHEY_SIMPLEX, 0.5, out_frame_indications[2], 2)
+            
+            cv2.imshow("Frame", frame)
+
+            key = cv2.waitKey(1) & 0xFF
+            
+            # if the `q` key was pressed or match was found, terminate the checking
+            if key == ord("q") or find != None:
                 break
         
         if find:
+            image = cv2.resize(cached_frame, (0, 0), fx=0.8, fy=0.8)
+            img_dir = os.path.join(os.getcwd(), f'../img/{self.user_id}_0.png')
+            cv2.imwrite(img_dir, image)
+            self.create_image(img_dir)
             self.lbl_facial_rest.config(text = 'Facial recognition OK', bg = '#00FF00')
             self.state['facial_recognition'] = 1
         else:
             self.lbl_facial_rest.config(text = 'Facial recognition failed. Try again.', bg = '#FF0000')
             self.state['facial_recognition'] = 0
 
-        camera.release()
+        vs.release()
         cv2.destroyAllWindows()
 
     def enroll_finger(self,location):
@@ -477,6 +629,17 @@ class RegisterGUI:
                 return False, 'Other error. Try again.'
 
         return True, 'OK'  
+
+    def get_facial_traits(self, frame):
+        face_encodings = []
+        small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+        rgb_small_frame = small_frame[:, :, ::-1]
+        face_encodings = face_recognition.face_encodings(rgb_small_frame)
+
+        if face_encodings:
+            return face_encodings[0]
+        return []
+        
         
 
 if __name__ == "__main__":
